@@ -1,0 +1,29 @@
+--!nonstrict
+local Datatypes = require("./Luwow/Datatypes")
+local task = Datatypes.task
+
+local PackageManager = require("../PackageManager")
+
+local Fusion = PackageManager.getPackage("Fusion")
+
+local Types = require("./Types")
+
+type UsedAs<T> = Types.UsedAs<T>
+type Scope = Types.Scope
+
+return function(scope: Scope): UsedAs<number>
+	local clockValue = scope:Value(0)
+
+	local thread = task.spawn(function()
+		while true do
+			local delta = task.wait()
+			clockValue:set(Fusion.peek(clockValue) + delta)
+		end
+	end)
+	
+	table.insert(scope, function() 
+		task.cancel(thread)
+	end)
+
+	return clockValue
+end

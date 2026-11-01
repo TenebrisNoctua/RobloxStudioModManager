@@ -1,0 +1,117 @@
+local Instances = require("../Utility/Luwow/Instances")
+local Hydrate = Instances.Hydrate
+local Text = require("./Text")
+
+local unwrap = require("../Utility/unwrap")
+local stripProps = require("../Utility/stripProps")
+local withDefaults = require("../Utility/withDefaults")
+local withCommonProps = require("../Utility/withCommonProps")
+local Types = require("../Utility/Types")
+local Translator = require("../Utility/Localization/Translator")
+
+local ControlState = require("../Enums/ControlState")
+local InputLabelSize = require("../Enums/InputLabelSize")
+local StateLayerAffordance = require("../Enums/StateLayerAffordance")
+
+local COMPONENT_ONLY_PROPERTIES = {
+	"stateLayer",
+	"selection",
+	"type",
+	"size",
+	"isRequired",
+	"isDisabled",
+	"textStyle",
+	"onHover",
+	"onActivated",
+	"Text" -- We don't want this to be hydrated and mess up the states.
+}
+
+local REQUIRED_INDICATOR = "*"
+local defaultProps = {
+	size = InputLabelSize.Medium :: InputLabelSize
+}
+
+local function labelText(text: string, isRequired: boolean?): string
+	if not isRequired then
+		return text
+	end
+
+	return if isRequired
+		then text .. REQUIRED_INDICATOR
+		else Translator:FormatByKey("CommonUI.Controls.Input.Optional", { inputLabel = text })
+end
+
+type UsedAs<T> = Types.UsedAs<T>
+type Scope = Types.Scope
+type Use = Types.Use
+
+type ControlState = ControlState.ControlState
+type InputLabelSize = InputLabelSize.InputLabelSize
+
+export type InputLabelProps = {
+	-- The scope the component will be created in
+	scope: Scope,
+	-- Optional text style override
+	textStyle: UsedAs<Types.ColorStyle>?,
+	-- Whether the input is required or not. Leave nil for the majority case
+	isRequired: UsedAs<boolean>?,
+	-- Whether the input is disabled
+	isDisabled: UsedAs<boolean>?,
+	-- Size of the input label
+	size: UsedAs<InputLabelSize>?, 
+	-- Callback for when the input label is activated.
+	-- This should trigger the activation of the associated input button.
+	onActivated: () -> ()?,
+	-- Callback for when the input label is hovered over.
+	-- This should trigger the hover state of the associated input button.
+	onHover: (boolean) -> ()?,
+	-- Whether the input label should be rich text or not
+	RichText: UsedAs<boolean>?,
+	-- Determines the string rendered by the UI element
+	Text: UsedAs<string>
+} & Types.CommonProps
+
+return function(inputLabelProps: InputLabelProps)
+	local scope = inputLabelProps.scope
+	assert(scope, "A scope has not been provided for the InputLabel component.")
+	
+	local props = withDefaults(inputLabelProps, defaultProps)
+	return scope:Computed(function(use: Use, innerScope: Scope)
+		local isDisabled = unwrap(props.isDisabled, use)
+		local size = unwrap(props.size, use)
+
+		local onStateChanged = if props.onHover
+			then function(newState: ControlState)
+				props.onHover(newState == ControlState.Hover)
+			end
+			else nil
+		
+		local componentProperties = withCommonProps(props, {
+			scope = innerScope,
+			Text = innerScope:Computed(function(use: Use) 
+				local newText = labelText(unwrap(props.Text, use), unwrap(props.isRequired, use))
+				return newText
+			end),
+			RichText = props.RichText,
+
+			-- InputLabel is not selectable because the associated
+			-- input button is what we want to focus with directional input
+			selection = {
+				Selectable = false,
+			},
+			onActivated = if not isDisabled then props.onActivated else nil,
+			onStateChanged = if not isDisabled then onStateChanged else nil,
+			stateLayer = { affordance = StateLayerAffordance.None },
+			textStyle = props.textStyle,
+			tag = {
+				["size-0 auto-xy text-wrap text-align-x-left text-align-y-top"] = true,
+				["content-muted"] = isDisabled,
+				["content-default"] = not isDisabled,
+				["text-title-small"] = size == InputLabelSize.Small,
+				["text-title-medium"] = size == InputLabelSize.Medium,
+				["text-title-large"] = size == InputLabelSize.Large,
+			}
+		})
+		return Hydrate(innerScope, unwrap(Text(componentProperties)))(stripProps(props, COMPONENT_ONLY_PROPERTIES))
+	end)
+end

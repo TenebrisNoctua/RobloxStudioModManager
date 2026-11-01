@@ -1,0 +1,148 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The mod manager's release version, such as v1.0.0"
+        required: true
+      luwow_version:
+        description: "The Luwow release to build with, such as v2026.11.01 (default: the latest)"
+        required: false
+      libraries_version:
+        description: "The Extended-Libraries release to ship, such as v2026.11.01 (default: the latest)"
+        required: false
+
+permissions:
+  contents: write
+
+env:
+  VERSION: ${{ inputs.version }}
+  GH_TOKEN: ${{ github.token }}
+  LUWOW_REPOSITORY: Luwow-Project/Release
+  LIBRARIES_REPOSITORY: TenebrisNoctua/Extended-Libraries
+
+jobs:
+  create-release:
+    runs-on: ubuntu-22.04
+    outputs:
+      luwow_version: ${{ steps.versions.outputs.luwow_version }}
+      libraries_version: ${{ steps.versions.outputs.libraries_version }}
+    steps:
+      - name: Validate the version
+        run: |
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "The version must look like v1.0.0, got $VERSION"
+            exit 1
+          fi
+
+      # Picked once, so every platform is built from the same releases
+      - name: Pick the Luwow and libraries releases
+        id: versions
+        run: |
+          luwow="${{ inputs.luwow_version }}"
+          libraries="${{ inputs.libraries_version }}"
+          [ -n "$luwow" ] || luwow="$(gh release view --repo "$LUWOW_REPOSITORY" --json tagName --jq .tagName)"
+          [ -n "$libraries" ] || libraries="$(gh release view --repo "$LIBRARIES_REPOSITORY" --json tagName --jq .tagName)"
+          gh release view "$luwow" --repo "$LUWOW_REPOSITORY" > /dev/null
+          gh release view "$libraries" --repo "$LIBRARIES_REPOSITORY" > /dev/null
+          echo "Luwow $luwow, libraries $libraries"
+          echo "luwow_version=$luwow" >> "$GITHUB_OUTPUT"
+          echo "libraries_version=$libraries" >> "$GITHUB_OUTPUT"
+
+      - name: Find or create the release
+        run: |
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "$VERSION is already released, its archives are replaced"
+          else
+            gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "$VERSION" --generate-notes --draft \
+              --notes "Built with Luwow ${{ steps.versions.outputs.luwow_version }} and Extended-Libraries ${{ steps.versions.outputs.libraries_version }}."
+          fi
+
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix: # Linux is left out until UDC supports it
+        os: [{name: windows-x64, version: windows-latest, exe: ".exe"}, {name: macos-arm64, version: macos-latest, exe: ""}]
+    name: ${{ matrix.os.name }}
+    runs-on: ${{ matrix.os.version }}
+    env:
+      LUWOW_VERSION: ${{ needs.create-release.outputs.luwow_version }}
+      LIBRARIES_VERSION: ${{ needs.create-release.outputs.libraries_version }}
+      EXE: ${{ matrix.os.exe }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Luwow and the libraries
+        run: |
+          gh release download "$LUWOW_VERSION" --repo "$LUWOW_REPOSITORY" \
+            --pattern "luwow-v*-${{ matrix.os.name }}.zip" --output luwow.zip
+          gh release download "$LIBRARIES_VERSION" --repo "$LIBRARIES_REPOSITORY" \
+            --pattern "luwow-libraries-*-${{ matrix.os.name }}.zip" --output libraries.zip
+          mkdir -p luwow-release/bin luwow-release/libraries
+          unzip -q luwow.zip -d luwow-release/bin
+          unzip -q libraries.zip -d luwow-release/libraries
+          chmod +x luwow-release/bin/* || true
+          ls -l luwow-release/bin luwow-release/libraries/libraries
+
+      - name: Compile
+        run: |
+          "luwow-release/bin/compile$EXE" -c .config.luau -s ./src/main.luau ./src ./Packages -a ./assets \
+            -f optimizationlevel=2 -o ./RobloxModManager.pkg
+          ls -l RobloxModManager.pkg
+
+      - name: Bundle
+        run: |
+          mkdir -p dist
+          cat "luwow-release/bin/runpackage$EXE" RobloxModManager.pkg > "dist/RobloxStudioModManager$EXE"
+          chmod +x "dist/RobloxStudioModManager$EXE"
+          cp -r luwow-release/libraries/libraries dist/libraries
+          ls -l dist dist/libraries
+
+      # The data appended after runpackage's signature mustn't stop macOS from running it. Started for a few
+      # seconds, it's only a failure when the system kills it.
+      - name: Check it starts
+        if: runner.os == 'macOS'
+        run: |
+          cd dist
+          ./RobloxStudioModManager &
+          pid=$!
+          sleep 8
+          if kill -0 "$pid" 2> /dev/null; then
+            echo "Still running after 8 seconds"
+            kill "$pid"
+            exit 0
+          fi
+          status=0
+          wait "$pid" || status=$?
+          echo "Exited with $status"
+          if [ "$status" -eq 137 ] || [ "$status" -eq 9 ]; then
+            echo "macOS killed the bundled executable"
+            exit 1
+          fi
+
+      - name: Pack
+        run: |
+          name="RobloxStudioModManager-${VERSION}-${{ matrix.os.name }}"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            (cd dist && 7z a -tzip "../${name}.zip" "RobloxStudioModManager$EXE" libraries > /dev/null)
+          else
+            (cd dist && zip -qry "../${name}.zip" "RobloxStudioModManager$EXE" libraries)
+          fi
+          ls -l "${name}.zip"
+
+      - name: Upload
+        run: gh release upload "$VERSION" RobloxStudioModManager-*.zip --repo "$GITHUB_REPOSITORY" --clobber
+
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Publish the release
+        run: gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false
