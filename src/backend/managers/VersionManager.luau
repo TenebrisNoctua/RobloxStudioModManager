@@ -11,7 +11,7 @@ const REPO_NAME = "Roblox-Studio-Mod-Manager"
 const REPO_BRANCH = "main"
 
 local Manager = {
-	ReleaseTag = "v2026.09.02",
+	ReleaseTag = "v2026.11.01",
 	BaseConfigUrl = `https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{REPO_BRANCH}/Config/`,
 	AllowUnsupportedVersions = false
 }
@@ -135,9 +135,11 @@ end
 
 -- The mod manager's latest release tag, nil when it can't be fetched
 function Manager.fetchLatestReleaseTag(): string?
-	local ok, releaseTag = pcall(Http.get, Manager.BaseConfigUrl .. "LatestReleaseTag.txt")
-	if not ok then return nil end
-	return string.match(releaseTag, "^%s*(.-)%s*$")
+	-- fix later if I add my own release tag system lol
+	--local ok, releaseTag = pcall(Http.get, Manager.BaseConfigUrl .. "LatestReleaseTag.txt")
+	--if not ok then return nil end
+	--return string.match(releaseTag, "^%s*(.-)%s*$")
+	return Manager.ReleaseTag
 end
 
 function Manager.returnCallbacks()
