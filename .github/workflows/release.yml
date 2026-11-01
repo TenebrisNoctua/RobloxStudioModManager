@@ -105,6 +105,30 @@ jobs:
           cp -r luwow-release/libraries/libraries dist/libraries
           ls -l dist dist/libraries
 
+      # Mark as a Windows GUI program in its PE header, so no console pops up
+      - name: Hide the console
+        if: runner.os == 'Windows'
+        shell: python
+        run: |
+          import struct
+          path = "dist/RobloxStudioModManager.exe"
+          with open(path, "r+b") as exe:
+              header = exe.read(0x40)
+              if header[:2] != b"MZ":
+                  raise SystemExit(f"{path} isn't an executable")
+              pe = struct.unpack_from("<I", header, 0x3C)[0]
+              exe.seek(pe)
+              if exe.read(4) != b"PE\0\0":
+                  raise SystemExit(f"{path} has no PE header")
+              subsystem = pe + 24 + 68
+              exe.seek(subsystem)
+              current = struct.unpack("<H", exe.read(2))[0]
+              if current != 3:
+                  raise SystemExit(f"expected the console subsystem (3), found {current}")
+              exe.seek(subsystem)
+              exe.write(struct.pack("<H", 2))
+          print("Subsystem changed from console to Windows GUI")
+
       # The data appended after runpackage's signature mustn't stop macOS from running it. Started for a few
       # seconds, it's only a failure when the system kills it.
       - name: Check it starts
